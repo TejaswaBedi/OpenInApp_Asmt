@@ -85,6 +85,18 @@ async function changeStatus(task_id) {
   }
 }
 
+// Deleting all associated subtasks on associated task deletion
+async function deleteSubTasks(task_id) {
+  try {
+    const deletedTasks = await SubTask.updateMany(
+      { task_id },
+      { $set: { deleted_at: Date.now() } }
+    );
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+}
+
 // Middleware for JWT authentication
 const authenticateJWT = (req, res, next) => {
   const token = req.headers["authorization"];
@@ -106,14 +118,14 @@ const authenticateJWT = (req, res, next) => {
 // User signup endpoint
 server.post("/openinapp/signup", async (req, res) => {
   try {
-    const { name, password } = req.body;
+    const { name, password, phone_number } = req.body;
     // Check if user already exists
     const existingUser = await User.findOne({ name });
     if (existingUser) {
       return res.status(400).json({ message: "User already exists" });
     }
     // Create new user
-    const newUser = new User({ name, password });
+    const newUser = new User({ name, password, phone_number });
     await newUser.save();
 
     res.json({ newUser });
@@ -288,11 +300,12 @@ server.delete(
     try {
       jwt.verify(req.token, "qwertyuiopasdfghjklzxcvbnm", (err, data) => {});
       const { task_id } = req.params;
-      let task = await Task.find({ task_id, deleted_at: null });
-      if (!task) {
+      let task = await Task.findOne({ _id: task_id, deleted_at: null });
+      if (!task || task.deleted_at !== null) {
         return res.status(404).json({ message: "Task not found" });
       }
       task.deleted_at = Date.now();
+      deleteSubTasks(task_id);
       await task.save();
       res.json({ message: "Task deleted successfully" });
     } catch (error) {
