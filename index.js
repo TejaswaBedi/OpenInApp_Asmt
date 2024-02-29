@@ -1,6 +1,8 @@
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
+const cron = require("node-cron");
+const twilio = require("twilio");
 const Task = require("./models/tasks");
 const SubTask = require("./models/subTasks");
 const User = require("./models/user");
@@ -39,7 +41,7 @@ function getStartDate() {
 
 // To get priority of a task
 function getPriority(days) {
-  if (days == 0) {
+  if (days <= 0) {
     return 0;
   } else if (days == 1 || days == 2) {
     return 1;
@@ -114,6 +116,61 @@ const authenticateJWT = (req, res, next) => {
     next();
   });
 };
+
+// Function for twilio calling
+async function performVoiceCalling() {
+  try {
+    const overdueTasks = await Task.find({
+      due_date: { $lt: new Date() },
+      status: { $ne: "DONE" },
+      deleted_at: null,
+    }).populate("user_id");
+    overdueTasks.sort((a, b) => a.user_id.priority - b.user_id.priority);
+    const twilioClient = twilio(
+      process.env.ACCOUNT_SID,
+      process.env.TWILIO_AUTH_TOKEN
+    );
+    const calledUsers = [];
+    for (const task of overdueTasks) {
+      const userPhoneNumber = task.user_id.phone_number;
+      if (!calledUsers.includes(userPhoneNumber)) {
+        await twilioClient.calls.create({
+          to: userPhoneNumber,
+          from: process.env.TWILIO_PHONE_NUMBER,
+          url: process.env.URL,
+        });
+        console.log(`Voice call made to ${userPhoneNumber}`);
+        calledUsers.push(userPhoneNumber);
+      } else {
+        console.log(`User ${userPhoneNumber} has already been called`);
+      }
+    }
+  } catch (error) {
+    console.error("Error performing voice calling:", error);
+  }
+}
+
+// Cron job for priority
+cron.schedule("0 10 * * *", async () => {
+  try {
+    const tasks = await Task.find({ deleted_at: null });
+    tasks.forEach(async (task) => {
+      const startDate = getStartDate();
+      const diffDays = getDaysDifference(startDate, task.due_date);
+      const priority = getPriority(diffDays - 1);
+      task.priority = priority;
+      await task.save();
+    });
+    console.log("Priority of tasks updated successfully!");
+  } catch (error) {
+    console.error("Error updating priority of tasks:", error);
+  }
+});
+
+// Cron job for calling users
+cron.schedule("0 11 * * *", async () => {
+  await performVoiceCalling();
+});
 
 // User signup endpoint
 server.post("/openinapp/signup", async (req, res) => {
