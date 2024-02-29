@@ -18,6 +18,73 @@ mongoose
     console.log("Connection Failed", err.message);
   });
 
+// Getting difference between today date and due date
+function getDaysDifference(startDate, endDate) {
+  const start = new Date(startDate).getTime();
+  const end = new Date(endDate).getTime();
+  const difference = end - start;
+  const daysDifference = Math.ceil(difference / (1000 * 60 * 60 * 24));
+  return daysDifference;
+}
+
+// To get today date in yyyy-mm-dd format
+function getStartDate() {
+  const miliSec = Date.now();
+  const currDate = new Date(miliSec);
+  const startDay = `${currDate.getFullYear()}-${
+    currDate.getMonth() + 1
+  }-${currDate.getDate()}`;
+  return startDay;
+}
+
+// To get priority of a task
+function getPriority(days) {
+  if (days == 0) {
+    return 0;
+  } else if (days == 1 || days == 2) {
+    return 1;
+  } else if (days == 3 || days == 4) {
+    return 2;
+  } else {
+    return 3;
+  }
+}
+
+// Changing status
+async function changeStatus(task_id) {
+  try {
+    const subtasks = await SubTask.find({
+      task_id,
+      deleted_at: null,
+    }).countDocuments();
+    const subtasks0 = await SubTask.find({
+      task_id,
+      status: 0,
+      deleted_at: null,
+    }).countDocuments();
+    const subtasks1 = await SubTask.find({
+      task_id,
+      status: 1,
+      deleted_at: null,
+    }).countDocuments();
+    if (subtasks == subtasks1) {
+      const task = await Task.findById(task_id);
+      task.status = "DONE";
+      await task.save();
+    } else if (subtasks - subtasks0 > 0) {
+      const task = await Task.findById(task_id);
+      task.status = "IN_PROGRESS";
+      await task.save();
+    } else {
+      const task = await Task.findById(task_id);
+      task.status = "TODO";
+      await task.save();
+    }
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+}
+
 // Middleware for JWT authentication
 const authenticateJWT = (req, res, next) => {
   const token = req.headers["authorization"];
@@ -82,7 +149,10 @@ server.post("/openinapp/tasks", authenticateJWT, async (req, res) => {
     jwt.verify(req.token, "qwertyuiopasdfghjklzxcvbnm", (err, data) => {});
     const { title, description, due_date } = req.body;
     const user_id = req.user.userId;
-    const task = new Task({ title, description, due_date, user_id });
+    const startDate = getStartDate();
+    const diffDays = getDaysDifference(startDate, due_date);
+    const priority = getPriority(diffDays - 1);
+    const task = new Task({ title, description, due_date, user_id, priority });
     await task.save();
     res.json({ task });
   } catch (error) {
@@ -102,6 +172,7 @@ server.post(
       const user_id = req.user.userId;
       const subtask = new SubTask({ task_id, user_id, status });
       await subtask.save();
+      changeStatus(task_id);
       res.json(subtask);
     } catch (error) {
       res.status(500).json({ message: error.message });
@@ -166,6 +237,10 @@ server.patch("/openinapp/tasks/:task_id", authenticateJWT, async (req, res) => {
     const { due_date, status } = req.body;
     if (due_date !== undefined) {
       task.due_date = due_date;
+      const startDate = getStartDate();
+      const diffDays = getDaysDifference(startDate, due_date);
+      const priority = getPriority(diffDays - 1);
+      task.priority = priority;
       task.updated_at = Date.now();
     }
     if (status !== undefined) {
@@ -187,8 +262,7 @@ server.patch(
     try {
       jwt.verify(req.token, "qwertyuiopasdfghjklzxcvbnm", (err, data) => {});
       const { subtask_id } = req.params;
-      const subtaskId = subtask_id.split("=")[1];
-      let subtask = await SubTask.findById({ _id: subtaskId });
+      let subtask = await SubTask.findById({ _id: subtask_id });
       if (!subtask) {
         return res.status(404).json({ message: "Subtask not found" });
       }
@@ -196,9 +270,10 @@ server.patch(
       if (status !== undefined) {
         subtask.status = status;
         subtask.updated_at = Date.now();
+        await subtask.save();
+        changeStatus(subtask.task_id);
+        res.json(subtask);
       }
-      await subtask.save();
-      res.json(subtask);
     } catch (error) {
       res.status(500).json({ message: error.message });
     }
@@ -213,7 +288,7 @@ server.delete(
     try {
       jwt.verify(req.token, "qwertyuiopasdfghjklzxcvbnm", (err, data) => {});
       const { task_id } = req.params;
-      let task = await Task.findById(task_id);
+      let task = await Task.find({ task_id, deleted_at: null });
       if (!task) {
         return res.status(404).json({ message: "Task not found" });
       }
@@ -227,6 +302,7 @@ server.delete(
 );
 
 // 8. Delete Sub Task API
+
 server.delete(
   "/openinapp/subtasks/:subtask_id",
   authenticateJWT,
@@ -234,11 +310,11 @@ server.delete(
     try {
       jwt.verify(req.token, "qwertyuiopasdfghjklzxcvbnm", (err, data) => {});
       const { subtask_id } = req.params;
-      const subtaskId = subtask_id.split("=")[1];
-      let subtask = await SubTask.findById({ _id: subtaskId });
-      if (!subtask) {
+      let subtask = await SubTask.findById({ _id: subtask_id });
+      if (!subtask || subtask.deleted_at !== null) {
         return res.status(404).json({ message: "Subtask not found" });
       }
+      changeStatus(subtask.task_id);
       subtask.deleted_at = Date.now();
       await subtask.save();
       res.json({ message: "Subtask deleted successfully" });
